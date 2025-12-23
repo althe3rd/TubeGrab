@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+*.md
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+*.egg-info/
+.eggs/
+
+# Local development
+downloads/
+cache/
+*.log
+
+# Docker
+docker-compose.yml
+Dockerfile
+
+# OS
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,54 @@
+version: "3.8"
+
+services:
+  tubegrab:
+    build: .
+    container_name: tubegrab
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Downloads directory - IMPORTANT: Change this path to your preferred location
+      # For Unraid, use something like: /mnt/user/downloads/youtube:/downloads
+      # For local testing: ./downloads:/downloads
+      - ./downloads:/downloads
+      
+      # Optional: Cache directory for yt-dlp (speeds up repeated requests)
+      - ./cache:/root/.cache/yt-dlp
+    environment:
+      # Set your timezone
+      - TZ=America/Chicago
+    # Resource limits (optional, uncomment if needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 2G
+
+# =============================================================================
+# UNRAID SETUP INSTRUCTIONS
+# =============================================================================
+#
+# Option 1: Using Docker Compose Manager plugin
+# ---------------------------------------------
+# 1. Install "Docker Compose Manager" from Community Applications
+# 2. Create a new compose stack
+# 3. Paste this file content and modify the volumes section:
+#    
+#    volumes:
+#      - /mnt/user/downloads/youtube:/downloads
+#      - /mnt/user/appdata/tubegrab/cache:/root/.cache/yt-dlp
+#
+# 4. Deploy the stack
+# 5. Access at http://your-unraid-ip:8080
+#
+# Option 2: Using Unraid Docker UI
+# ---------------------------------
+# 1. Add a new container manually
+# 2. Repository: Build from this directory or push to Docker Hub first
+# 3. Add Port Mapping: Host 8080 -> Container 8080
+# 4. Add Path Mapping:
+#    - Container Path: /downloads
+#    - Host Path: /mnt/user/downloads/youtube (or your preferred location)
+# 5. Apply and start
+#
+# =============================================================================
