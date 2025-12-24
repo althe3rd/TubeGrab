@@ -53,4 +53,11 @@ if os.path.exists(frontend_path):
     @app.get("/")
     async def serve_frontend():
         return FileResponse(os.path.join(frontend_path, "index.html"))
+    
+    @app.get("/manifest.json")
+    async def serve_manifest():
+        manifest_path = os.path.join(frontend_path, "manifest.json")
+        if os.path.exists(manifest_path):
+            return FileResponse(manifest_path, media_type="application/manifest+json")
+        return {"error": "Manifest not found"}
 

@@ -35,6 +35,8 @@ class YTDLPService:
         
         # Create directories if they don't exist
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        # Set permissions for NFS shares
+        self._set_file_permissions(self.download_dir)
 
     def _sanitize_filename(self, name: str) -> str:
         """Sanitize a filename/folder name to remove invalid characters."""
@@ -62,6 +64,13 @@ class YTDLPService:
                 # Create Artist/Album folder structure
                 output_dir = self.plex_music_dir / artist_clean / album_clean
                 output_dir.mkdir(parents=True, exist_ok=True)
+                # Set permissions for NFS shares
+                self._set_file_permissions(output_dir)
+                # Also set permissions on parent directories
+                if output_dir.parent.exists():
+                    self._set_file_permissions(output_dir.parent)
+                if self.plex_music_dir.exists():
+                    self._set_file_permissions(self.plex_music_dir)
                 
                 # Filename template: TrackNumber - TrackName.ext
                 # We'll use 01, 02, etc. based on existing files in the album
@@ -69,10 +78,12 @@ class YTDLPService:
             else:
                 # Fallback if no artist/album info
                 self.plex_music_dir.mkdir(parents=True, exist_ok=True)
+                self._set_file_permissions(self.plex_music_dir)
                 return self.plex_music_dir, "%(title)s.%(ext)s"
         elif send_to_plex and not is_audio_only:
             # Plex movies: just put in movies folder
             self.plex_movies_dir.mkdir(parents=True, exist_ok=True)
+            self._set_file_permissions(self.plex_movies_dir)
             return self.plex_movies_dir, "%(title)s.%(ext)s"
         else:
             # Regular downloads
@@ -307,8 +318,56 @@ class YTDLPService:
                     artist = parts[0].strip()
                     clean_title = parts[1].strip()
             
-            # Use uploader/channel as album name
-            album = uploader or channel or "YouTube"
+            # Try to extract album from video metadata
+            # Check if yt-dlp extracted album info (available for some music sources)
+            album = video_info.get("album")
+            
+            # Check playlist name (often represents an album for music videos)
+            if not album:
+                playlist = video_info.get("playlist") or video_info.get("playlist_title")
+                if playlist:
+                    # Use playlist name as album if it looks like an album name
+                    # (not generic names like "Uploads" or "Videos")
+                    generic_names = ["uploads", "videos", "playlist", "music", "songs", "tracks"]
+                    if playlist.lower() not in generic_names:
+                        album = playlist
+            
+            # If no album in metadata, try to extract from description
+            if not album:
+                description = video_info.get("description", "")
+                # Look for common album patterns in description
+                # Pattern: "Album:", "from [Album]", "on [Album]", etc.
+                album_patterns = [
+                    r'Album[:\s]+([^\n]+)',
+                    r'from\s+["\']?([^"\'\n]+)["\']?\s+album',
+                    r'on\s+["\']?([^"\'\n]+)["\']?\s+album',
+                    r'Album:\s*([^\n]+)',
+                ]
+                for pattern in album_patterns:
+                    match = re.search(pattern, description, re.IGNORECASE)
+                    if match:
+                        album = match.group(1).strip()
+                        # Clean up common suffixes
+                        album = re.sub(r'\s*\[.*?\]\s*$', '', album)  # Remove [stuff]
+                        album = re.sub(r'\s*\(.*?\)\s*$', '', album)  # Remove (stuff)
+                        album = album.strip()
+                        if album:
+                            break
+            
+            # If still no album, check if title contains album info (e.g., "Song (from Album)")
+            if not album:
+                # Pattern: "Title (from Album)" or "Title [from Album]"
+                album_match = re.search(r'\(from\s+([^)]+)\)|\[from\s+([^\]]+)\]', clean_title, re.IGNORECASE)
+                if album_match:
+                    album = (album_match.group(1) or album_match.group(2)).strip()
+                    # Remove the album part from title
+                    clean_title = re.sub(r'\s*\(from\s+[^)]+\)\s*|\s*\[from\s+[^\]]+\]\s*', '', clean_title, flags=re.IGNORECASE).strip()
+            
+            # Fallback: use uploader/channel as album name only if we have no other option
+            # But prefer "Singles" or artist name + " Collection" as more accurate
+            if not album:
+                # Use a generic fallback instead of uploader to avoid confusion
+                album = "Singles" if artist else (uploader or channel or "YouTube")
 
         # Get output directory and filename template
         output_dir, filename_template = self._get_output_dir(
@@ -436,6 +495,12 @@ class YTDLPService:
             if final_file.name != new_name and not new_file.exists():
                 final_file.rename(new_file)
                 final_file = new_file
+                # Set permissions on the renamed file
+                self._set_file_permissions(final_file)
+
+        # Set permissions on the final file for NFS shares
+        if final_file.exists():
+            self._set_file_permissions(final_file)
 
         # Add metadata for audio files to help Plex identify them
         if is_audio_only and final_file.exists():
@@ -453,6 +518,9 @@ class YTDLPService:
                     uploader if uploader else None
                 )
             await loop.run_in_executor(None, _add_metadata)
+            # Set permissions after metadata is added
+            if final_file.exists():
+                self._set_file_permissions(final_file)
 
         # Convert video if requested (only for video files, not audio-only)
         if convert_video and not is_audio_only and final_file.exists():
@@ -487,6 +555,9 @@ class YTDLPService:
                 converted_file = await loop.run_in_executor(None, _convert)
                 final_file = converted_file
                 print(f"Video conversion completed: {final_file.name}")
+                # Set permissions on converted file
+                if final_file.exists():
+                    self._set_file_permissions(final_file)
                 
                 # Send final progress update (100%) but don't set status
                 # Let the queue service set it to COMPLETED when download function returns
@@ -557,6 +628,8 @@ class YTDLPService:
             
             # Replace original with tagged file
             temp_file.replace(file_path)
+            # Set permissions on the file with metadata for NFS shares
+            self._set_file_permissions(file_path)
             return True
             
         except subprocess.CalledProcessError as e:
@@ -802,6 +875,9 @@ class YTDLPService:
             # Move temp file to final location
             temp_file.replace(output_file)
             
+            # Set permissions on the converted file for NFS shares
+            self._set_file_permissions(output_file)
+            
             # Remove original file if it's different from output
             if file_path != output_file and file_path.exists():
                 file_path.unlink()  # Delete original
@@ -837,6 +913,22 @@ class YTDLPService:
             return True
         except (PermissionError, OSError):
             return False
+
+    def _set_file_permissions(self, file_path: Path):
+        """Set appropriate file permissions for NFS shares and shared storage.
+        Sets files to 664 (rw-rw-r--) and directories to 775 (rwxrwxr-x).
+        """
+        try:
+            if file_path.exists():
+                if file_path.is_dir():
+                    # Directories: 775 (rwxrwxr-x) - readable/writable by owner and group
+                    file_path.chmod(0o775)
+                else:
+                    # Files: 664 (rw-rw-r--) - readable/writable by owner and group
+                    file_path.chmod(0o664)
+        except (PermissionError, OSError) as e:
+            # If we can't set permissions (e.g., on NFS with root_squash), log but don't fail
+            print(f"Could not set permissions on {file_path}: {e}")
 
 
 # Singleton instance

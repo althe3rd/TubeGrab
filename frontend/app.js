@@ -61,7 +61,23 @@ document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     connectSSE();
     checkPlexStatus();
+    registerServiceWorker();
 });
+
+// Register Service Worker for PWA
+function registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/static/service-worker.js')
+                .then((registration) => {
+                    console.log('Service Worker registered:', registration.scope);
+                })
+                .catch((error) => {
+                    console.log('Service Worker registration failed:', error);
+                });
+        });
+    }
+}
 
 function setupEventListeners() {
     // URL Input & Analyze
