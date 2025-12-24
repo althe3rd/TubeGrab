@@ -67,6 +67,8 @@ class DownloadQueueManager:
                 is_audio_only=request.is_audio_only,
                 audio_quality=request.audio_quality,
                 audio_codec=request.audio_codec,
+                send_to_plex=request.send_to_plex,
+                convert_video=request.convert_video,
             )
             self._queue[item.id] = item
             self._order.append(item.id)
@@ -112,11 +114,11 @@ class DownloadQueueManager:
         return False
 
     async def cancel_download(self, item_id: str) -> bool:
-        """Cancel an active download."""
+        """Cancel an active download or conversion."""
         async with self._lock:
             if item_id in self._queue:
                 item = self._queue[item_id]
-                if item.status in [DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING]:
+                if item.status in [DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING, DownloadStatus.CONVERTING]:
                     with self._thread_lock:
                         self._cancelled.add(item_id)
                     item.status = DownloadStatus.CANCELLED
@@ -153,6 +155,27 @@ class DownloadQueueManager:
                 if item_id in self._order:
                     self._order.remove(item_id)
                 count += 1
+
+        if count > 0:
+            await self._broadcast_full_update()
+        return count
+
+    async def cancel_all(self) -> int:
+        """Cancel all active, queued, and converting downloads."""
+        count = 0
+        async with self._lock:
+            # Mark all active items as cancelled
+            for item_id, item in self._queue.items():
+                if item.status in [
+                    DownloadStatus.QUEUED,
+                    DownloadStatus.DOWNLOADING,
+                    DownloadStatus.PROCESSING,
+                    DownloadStatus.CONVERTING
+                ]:
+                    with self._thread_lock:
+                        self._cancelled.add(item_id)
+                    item.status = DownloadStatus.CANCELLED
+                    count += 1
 
         if count > 0:
             await self._broadcast_full_update()
@@ -227,8 +250,14 @@ class DownloadQueueManager:
                 item.speed = data.get("speed")
                 item.eta = data.get("eta")
 
-                if data.get("status") == "processing":
-                    item.status = DownloadStatus.PROCESSING
+                # Only update status if item is not already completed or failed
+                # This prevents late-arriving progress updates from overriding completion
+                if item.status not in [DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELLED]:
+                    status = data.get("status")
+                    if status == "processing":
+                        item.status = DownloadStatus.PROCESSING
+                    elif status == "converting":
+                        item.status = DownloadStatus.CONVERTING
 
                 await self._broadcast_update(item)
 
@@ -294,6 +323,8 @@ class DownloadQueueManager:
                 is_audio_only=item.is_audio_only,
                 audio_quality=item.audio_quality,
                 audio_codec=item.audio_codec,
+                send_to_plex=item.send_to_plex,
+                convert_video=item.convert_video,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
             )

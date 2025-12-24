@@ -433,6 +433,90 @@ body {
     color: var(--text-muted);
 }
 
+/* Plex Toggle */
+.plex-toggle-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 12px 16px;
+    margin-top: 12px;
+}
+
+.plex-toggle-container.hidden {
+    display: none;
+}
+
+.plex-toggle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.plex-toggle input {
+    display: none;
+}
+
+.plex-toggle-slider {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    background: var(--bg-primary);
+    border-radius: 12px;
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+}
+
+.plex-toggle-slider::before {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: all 0.3s ease;
+}
+
+.plex-toggle input:checked + .plex-toggle-slider {
+    background: rgba(229, 160, 21, 0.3);
+}
+
+.plex-toggle input:checked + .plex-toggle-slider::before {
+    transform: translateX(20px);
+    background: #e5a015;
+}
+
+.plex-toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
+}
+
+.plex-toggle-label svg {
+    width: 18px;
+    height: 18px;
+    color: #e5a015;
+}
+
+.plex-toggle input:checked ~ .plex-toggle-label {
+    color: var(--text-primary);
+}
+
+.plex-toggle-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
 /* Download Button */
 .download-btn {
     display: flex;
@@ -485,6 +569,12 @@ body {
     margin-bottom: 20px;
 }
 
+.queue-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
 .queue-title {
     display: flex;
     align-items: center;
@@ -524,6 +614,17 @@ body {
 .clear-btn:hover {
     background: var(--bg-tertiary);
     color: var(--text-primary);
+}
+
+.stop-all-btn {
+    border-color: rgba(255, 87, 87, 0.3);
+    color: #ff5757;
+}
+
+.stop-all-btn:hover {
+    background: rgba(255, 87, 87, 0.1);
+    border-color: rgba(255, 87, 87, 0.5);
+    color: #ff5757;
 }
 
 .queue-list {
@@ -668,6 +769,12 @@ body {
 .queue-item-status.processing {
     background: rgba(153, 51, 255, 0.15);
     color: #9933ff;
+}
+
+.queue-item-status.converting {
+    background: rgba(255, 170, 0, 0.2);
+    color: var(--status-warning);
+    animation: pulse 2s ease-in-out infinite;
 }
 
 .queue-item-status.completed {

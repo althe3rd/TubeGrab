@@ -50,6 +50,13 @@ async def clear_completed():
     return {"status": "cleared", "count": count}
 
 
+@router.post("/queue/cancel-all")
+async def cancel_all():
+    """Cancel all active, queued, and converting downloads."""
+    count = await queue_manager.cancel_all()
+    return {"status": "cancelled", "count": count}
+
+
 @router.get("/queue/events")
 async def queue_events():
     """

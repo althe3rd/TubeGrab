@@ -81,6 +81,32 @@
                             </div>
                         </div>
 
+                        <!-- Plex Integration Toggle -->
+                        <div class="plex-toggle-container hidden" id="plex-toggle-container">
+                            <label class="plex-toggle">
+                                <input type="checkbox" id="plex-toggle" />
+                                <span class="plex-toggle-slider"></span>
+                                <span class="plex-toggle-label">
+                                    <svg viewBox="0 0 24 24" fill="none"><polygon points="5,3 19,12 5,21 5,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="currentColor"/></svg>
+                                    Send to Plex Library
+                                </span>
+                            </label>
+                            <span class="plex-toggle-hint" id="plex-toggle-hint">Videos → Movies, Audio → Music</span>
+                        </div>
+
+                        <!-- Video Conversion Toggle (only for video downloads) -->
+                        <div class="plex-toggle-container hidden" id="convert-toggle-container">
+                            <label class="plex-toggle">
+                                <input type="checkbox" id="convert-toggle" />
+                                <span class="plex-toggle-slider"></span>
+                                <span class="plex-toggle-label">
+                                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    Convert to H.264/AAC MP4
+                                </span>
+                            </label>
+                            <span class="plex-toggle-hint" id="convert-toggle-hint">Converts Opus/other codecs to compatible format (uses GPU if available)</span>
+                        </div>
+
                         <button class="download-btn" id="download-btn">
                             <svg viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="7,10 12,15 17,10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             Add to Queue
@@ -96,10 +122,16 @@
                         <svg viewBox="0 0 24 24" fill="none"><path d="M8 6h13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 12h13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 18h13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 6h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 12h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 18h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         Download Queue
                     </h3>
-                    <button class="clear-btn" id="clear-completed-btn">
-                        <svg viewBox="0 0 24 24" fill="none"><polyline points="3,6 5,6 21,6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        Clear Completed
-                    </button>
+                    <div class="queue-actions">
+                        <button class="clear-btn stop-all-btn" id="stop-all-btn">
+                            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/><rect x="7" y="7" width="10" height="10" fill="currentColor"/></svg>
+                            Stop All
+                        </button>
+                        <button class="clear-btn" id="clear-completed-btn">
+                            <svg viewBox="0 0 24 24" fill="none"><polyline points="3,6 5,6 21,6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            Clear Completed
+                        </button>
+                    </div>
                 </div>
                 <div class="queue-list" id="queue-list">
                     <div class="queue-empty" id="queue-empty">

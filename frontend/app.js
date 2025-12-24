@@ -9,6 +9,9 @@ const state = {
     playlistItems: [],
     selectedFormat: null,
     isAudioOnly: false,
+    sendToPlex: false,
+    convertVideo: false,
+    plexAvailable: false,
     queue: [],
     eventSource: null,
 };
@@ -35,6 +38,7 @@ const elements = {
     queueList: document.getElementById('queue-list'),
     queueEmpty: document.getElementById('queue-empty'),
     clearCompletedBtn: document.getElementById('clear-completed-btn'),
+    stopAllBtn: document.getElementById('stop-all-btn'),
     activeStat: document.getElementById('active-stat'),
     completedStat: document.getElementById('completed-stat'),
     playlistModal: document.getElementById('playlist-modal'),
@@ -44,12 +48,19 @@ const elements = {
     downloadAll: document.getElementById('download-all'),
     modalClose: document.getElementById('modal-close'),
     toastContainer: document.getElementById('toast-container'),
+    plexToggleContainer: document.getElementById('plex-toggle-container'),
+    plexToggle: document.getElementById('plex-toggle'),
+    plexToggleHint: document.getElementById('plex-toggle-hint'),
+    convertToggleContainer: document.getElementById('convert-toggle-container'),
+    convertToggle: document.getElementById('convert-toggle'),
+    convertToggleHint: document.getElementById('convert-toggle-hint'),
 };
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     connectSSE();
+    checkPlexStatus();
 });
 
 function setupEventListeners() {
@@ -69,6 +80,7 @@ function setupEventListeners() {
 
     // Clear Completed
     elements.clearCompletedBtn.addEventListener('click', handleClearCompleted);
+    elements.stopAllBtn.addEventListener('click', handleStopAll);
 
     // Playlist Modal
     elements.modalClose.addEventListener('click', closePlaylistModal);
@@ -77,6 +89,44 @@ function setupEventListeners() {
     elements.playlistModal.addEventListener('click', (e) => {
         if (e.target === elements.playlistModal) closePlaylistModal();
     });
+
+    // Plex Toggle
+    if (elements.plexToggle) {
+        elements.plexToggle.addEventListener('change', (e) => {
+            state.sendToPlex = e.target.checked;
+        });
+    }
+
+    // Convert Toggle
+    if (elements.convertToggle) {
+        elements.convertToggle.addEventListener('change', (e) => {
+            state.convertVideo = e.target.checked;
+        });
+    }
+}
+
+// Check Plex integration status
+async function checkPlexStatus() {
+    try {
+        const response = await fetch('/api/plex/status');
+        if (response.ok) {
+            const data = await response.json();
+            state.plexAvailable = data.enabled;
+            
+            if (data.enabled && elements.plexToggleContainer) {
+                // Update hint with actual paths
+                if (elements.plexToggleHint) {
+                    const hints = [];
+                    if (data.movies_available) hints.push('Videos → Movies');
+                    if (data.music_available) hints.push('Audio → Music');
+                    elements.plexToggleHint.textContent = hints.join(', ') || 'Plex integration available';
+                }
+            }
+        }
+    } catch (error) {
+        console.log('Plex integration not available');
+        state.plexAvailable = false;
+    }
 }
 
 // SSE Connection for real-time updates
@@ -171,6 +221,27 @@ function displayVideoInfo(video) {
     // Populate format options
     renderFormatOptions(video.formats);
 
+    // Show Plex toggle if available
+    if (state.plexAvailable && elements.plexToggleContainer) {
+        elements.plexToggleContainer.classList.remove('hidden');
+        // Reset toggle state
+        if (elements.plexToggle) {
+            elements.plexToggle.checked = state.sendToPlex;
+        }
+    }
+
+    // Show convert toggle only for video downloads (not audio-only)
+    if (elements.convertToggleContainer) {
+        if (!state.isAudioOnly) {
+            elements.convertToggleContainer.classList.remove('hidden');
+            if (elements.convertToggle) {
+                elements.convertToggle.checked = state.convertVideo;
+            }
+        } else {
+            elements.convertToggleContainer.classList.add('hidden');
+        }
+    }
+
     elements.videoSection.classList.remove('hidden');
 }
 
@@ -256,6 +327,15 @@ function handleFormatTabChange(tab) {
     tab.classList.add('active');
 
     state.isAudioOnly = tab.dataset.type === 'audio';
+
+    // Show/hide convert toggle based on audio/video selection
+    if (elements.convertToggleContainer) {
+        if (state.isAudioOnly) {
+            elements.convertToggleContainer.classList.add('hidden');
+        } else {
+            elements.convertToggleContainer.classList.remove('hidden');
+        }
+    }
 
     if (state.currentVideo) {
         renderFormatOptions(state.currentVideo.formats);
@@ -364,6 +444,8 @@ async function handleDownload() {
                 is_audio_only: state.isAudioOnly,
                 audio_quality: state.selectedFormat.quality,
                 audio_codec: state.selectedFormat.codec,
+                send_to_plex: state.sendToPlex,
+                convert_video: state.convertVideo,
             }));
 
             const response = await fetch('/api/download/batch', {
@@ -387,6 +469,8 @@ async function handleDownload() {
                 is_audio_only: state.isAudioOnly,
                 audio_quality: state.selectedFormat.quality,
                 audio_codec: state.selectedFormat.codec,
+                send_to_plex: state.sendToPlex,
+                convert_video: state.convertVideo,
             };
 
             const response = await fetch('/api/download', {
@@ -406,6 +490,8 @@ async function handleDownload() {
         state.currentVideo = null;
         state.isPlaylist = false;
         state.playlistItems = [];
+        state.sendToPlex = false;
+        state.convertVideo = false;
 
     } catch (error) {
         showToast(error.message, 'error');
@@ -470,13 +556,14 @@ function updateQueueItemElement(el, item) {
         queued: 'Queued',
         downloading: 'Downloading',
         processing: 'Processing',
+        converting: 'Converting',
         completed: 'Completed',
         failed: 'Failed',
         cancelled: 'Cancelled',
     };
 
-    const showProgress = ['downloading', 'processing'].includes(item.status);
-    const showCancel = ['queued', 'downloading'].includes(item.status);
+    const showProgress = ['downloading', 'processing', 'converting'].includes(item.status);
+    const showCancel = ['queued', 'downloading', 'converting'].includes(item.status);
     const showRetry = ['failed', 'cancelled'].includes(item.status);
     const showDownload = item.status === 'completed';
 
@@ -571,6 +658,22 @@ async function handleClearCompleted() {
 
         const data = await response.json();
         showToast(`Cleared ${data.count} completed downloads`, 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function handleStopAll() {
+    if (!confirm('Are you sure you want to stop all active downloads? This will cancel all queued, downloading, and converting items.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/queue/cancel-all', { method: 'POST' });
+        if (!response.ok) throw new Error('Failed to stop all downloads');
+
+        const data = await response.json();
+        showToast(`Stopped ${data.count} download(s)`, 'success');
     } catch (error) {
         showToast(error.message, 'error');
     }

@@ -8,6 +8,7 @@ A self-hosted YouTube video and audio downloader with a beautiful web interface.
 - **Playlist Support** - Automatically detects playlists and lets you choose to download one or all videos
 - **Quality Selection** - Choose from available resolutions (4K, 1080p, 720p, etc.)
 - **Audio Extraction** - Download audio-only in MP3 (320/192/128 kbps) or M4A format
+- **Plex Integration** - Send videos directly to your Plex Movies library, audio to Music library
 - **Download Queue** - View, manage, cancel, and retry downloads
 - **Real-time Progress** - See download progress with speed and ETA
 - **Browser Downloads** - Download completed files directly from the web UI
@@ -92,12 +93,16 @@ docker run -d \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TZ` | `UTC` | Timezone for timestamps |
+| `PLEX_MOVIES_DIR` | `/plex/movies` | Container path for Plex movies |
+| `PLEX_MUSIC_DIR` | `/plex/music` | Container path for Plex music |
 
 ### Volume Mounts
 
 | Container Path | Purpose |
 |----------------|---------|
-| `/downloads` | Where downloaded videos/audio are saved |
+| `/downloads` | Default download location |
+| `/plex/movies` | Plex movies library (for video content) |
+| `/plex/music` | Plex music library (for audio content) |
 | `/root/.cache/yt-dlp` | (Optional) Cache for yt-dlp metadata |
 
 ### Ports
@@ -105,6 +110,116 @@ docker run -d \
 | Port | Purpose |
 |------|---------|
 | 8080 | Web interface |
+
+## Plex Integration
+
+TubeGrab can send downloads directly to your Plex library folders. When enabled, videos go to your Movies library and audio goes to your Music library.
+
+### Setup
+
+1. Map your Plex library folders as volumes:
+   ```bash
+   docker run -d \
+     --name tubegrab \
+     -p 8080:8080 \
+     -v /path/to/downloads:/downloads \
+     -v /path/to/plex/movies:/plex/movies \
+     -v /path/to/plex/music:/plex/music \
+     althe3rd/tubegrab:latest
+   ```
+
+2. In the TubeGrab UI, toggle "Send to Plex Library" before downloading
+
+3. Plex will automatically detect new content (or trigger a library scan)
+
+### Unraid Example
+
+```bash
+docker run -d \
+  --name tubegrab \
+  -p 8080:8080 \
+  -v /mnt/user/downloads/youtube:/downloads \
+  -v /mnt/user/data/media/movies:/plex/movies \
+  -v /mnt/user/data/media/music:/plex/music \
+  -e TZ=America/Chicago \
+  --restart unless-stopped \
+  althe3rd/tubegrab:latest
+```
+
+### Notes
+
+- The Plex toggle only appears if the Plex directories are mounted
+- Videos → `/plex/movies` (your Plex Movies library)
+- Audio → `/plex/music` (your Plex Music library)
+- Regular downloads still go to `/downloads`
+
+## Video Conversion
+
+TubeGrab can convert downloaded videos to H.264/AAC MP4 format for better compatibility. This is especially useful for videos that use Opus or other codecs that may not be supported by all players.
+
+### Features
+
+- **Hardware Acceleration**: Automatically uses NVIDIA GPU (NVENC) if available
+- **Software Fallback**: Uses CPU encoding if GPU is not available
+- **Format**: Converts to H.264 video + AAC audio in MP4 container
+- **Quality**: CRF 23 (good balance of quality and file size)
+
+### Usage
+
+1. When downloading a video (not audio-only), you'll see a toggle: **"Convert to H.264/AAC MP4"**
+2. Enable it before clicking "Add to Queue"
+3. The conversion happens automatically after download
+4. The converted file replaces the original
+
+### GPU Support (Optional)
+
+**The container works perfectly without GPU** - it will use software encoding. GPU support is optional for faster conversion.
+
+#### For Unraid with NVIDIA GPU:
+
+**Prerequisites:**
+1. Install the **"Nvidia Driver"** plugin from Community Applications
+2. Install your preferred NVIDIA driver version (latest, production, etc.)
+3. **Restart your Unraid server** - This is required for the driver to be active
+4. After restart, verify the driver is loaded: Go to Settings → Nvidia Driver and confirm your GPU is listed
+
+**Option 1: Using Unraid Docker UI (Recommended)**
+
+If `--gpus all` doesn't work, use environment variables instead:
+
+1. In the container settings, go to **"Show more settings"**
+2. Under **"Add another Path, Port, Variable, Label or Device"**, add these **Variables**:
+   - **Key**: `NVIDIA_VISIBLE_DEVICES` → **Value**: `all`
+   - **Key**: `NVIDIA_DRIVER_CAPABILITIES` → **Value**: `compute,video,utility`
+3. **Do NOT add** `--gpus all` in Extra Parameters if using the variables above
+
+**Option 2: Using Extra Parameters (Alternative)**
+
+If environment variables don't work, try:
+1. Under **"Extra Parameters"**, add: `--gpus all`
+2. If this causes the container to fail to start, use Option 1 instead
+
+**Option 3: Using Command Line**
+```bash
+docker run -d \
+  --name tubegrab \
+  -p 8080:8080 \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  -v /mnt/user/downloads/youtube:/downloads \
+  -v /mnt/user/appdata/tubegrab/cache:/root/.cache/yt-dlp \
+  -v /mnt/user/data/media/movies:/plex/movies \
+  -v /mnt/user/data/media/music:/plex/music \
+  -e TZ=America/Chicago \
+  --restart unless-stopped \
+  althe3rd/tubegrab:latest
+```
+
+**Troubleshooting:**
+- If the container won't start with GPU settings, remove them - the app will use CPU encoding (slower but works fine)
+- Check container logs: `docker logs tubegrab` to see if GPU is detected
+- The app will automatically detect GPU and use it if available, or fall back to CPU
+- After adding GPU support, you should see "Using NVIDIA NVENC" in the logs during conversion
 
 ## Usage
 

@@ -9,6 +9,7 @@ class DownloadStatus(str, Enum):
     QUEUED = "queued"
     DOWNLOADING = "downloading"
     PROCESSING = "processing"
+    CONVERTING = "converting"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -68,6 +69,8 @@ class DownloadRequest(BaseModel):
     is_audio_only: bool = False
     audio_quality: Optional[str] = None  # e.g., "320", "192", "128"
     audio_codec: Optional[str] = None  # e.g., "mp3", "m4a"
+    send_to_plex: bool = False  # Route to Plex library folder
+    convert_video: bool = False  # Convert video to H.264/AAC MP4 after download
     playlist_items: Optional[List[str]] = None  # List of video IDs if downloading multiple
 
 
@@ -82,6 +85,8 @@ class QueueItem(BaseModel):
     is_audio_only: bool = False
     audio_quality: Optional[str] = None
     audio_codec: Optional[str] = None
+    send_to_plex: bool = False
+    convert_video: bool = False
     status: DownloadStatus = DownloadStatus.QUEUED
     progress: float = 0.0
     speed: Optional[str] = None

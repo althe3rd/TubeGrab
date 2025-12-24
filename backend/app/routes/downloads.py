@@ -126,3 +126,12 @@ async def list_files():
     files.sort(key=lambda x: x["modified"], reverse=True)
     
     return {"files": files}
+
+
+@router.get("/plex/status")
+async def get_plex_status():
+    """
+    Check if Plex integration is available.
+    Returns status of Plex directory mappings.
+    """
+    return ytdlp_service.get_plex_status()
