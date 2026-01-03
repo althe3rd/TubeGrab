@@ -33,8 +33,17 @@ class YTDLPService:
         self.plex_movies_dir = plex_movies_dir
         self.plex_music_dir = plex_music_dir
         
+        # Mount status cache: stores (status, timestamp) tuples
+        # Key is mount path (as string), value is (is_available: bool, timestamp: float)
+        self._mount_status_cache: Dict[str, Tuple[bool, float]] = {}
+        self._mount_cache_ttl = 30.0  # Cache TTL in seconds (30 seconds)
+        
+        # Background health monitor task
+        self._health_monitor_task: Optional[asyncio.Task] = None
+        self._monitor_running = False
+        
         # Create directories if they don't exist
-        self.download_dir.mkdir(parents=True, exist_ok=True)
+        self._mkdir_with_retry(self.download_dir)
         # Set permissions for NFS shares
         self._set_file_permissions(self.download_dir)
 
@@ -63,26 +72,29 @@ class YTDLPService:
                 
                 # Create Artist/Album folder structure
                 output_dir = self.plex_music_dir / artist_clean / album_clean
-                output_dir.mkdir(parents=True, exist_ok=True)
+                self._mkdir_with_retry(output_dir)
                 # Set permissions for NFS shares
                 self._set_file_permissions(output_dir)
-                # Also set permissions on parent directories
-                if output_dir.parent.exists():
-                    self._set_file_permissions(output_dir.parent)
-                if self.plex_music_dir.exists():
-                    self._set_file_permissions(self.plex_music_dir)
+                # Also set permissions on parent directories (with retry for NFS)
+                try:
+                    if self._retry_nfs_operation(lambda: output_dir.parent.exists(), max_retries=2, operation_name=f"checking parent dir: {output_dir.parent}", path=output_dir.parent):
+                        self._set_file_permissions(output_dir.parent)
+                    if self._retry_nfs_operation(lambda: self.plex_music_dir.exists(), max_retries=2, operation_name=f"checking plex_music_dir: {self.plex_music_dir}", path=self.plex_music_dir):
+                        self._set_file_permissions(self.plex_music_dir)
+                except Exception as e:
+                    print(f"Warning: Could not set permissions on parent directories: {e}")
                 
                 # Filename template: TrackNumber - TrackName.ext
                 # We'll use 01, 02, etc. based on existing files in the album
                 return output_dir, "%(title)s.%(ext)s"
             else:
                 # Fallback if no artist/album info
-                self.plex_music_dir.mkdir(parents=True, exist_ok=True)
+                self._mkdir_with_retry(self.plex_music_dir)
                 self._set_file_permissions(self.plex_music_dir)
                 return self.plex_music_dir, "%(title)s.%(ext)s"
         elif send_to_plex and not is_audio_only:
             # Plex movies: just put in movies folder
-            self.plex_movies_dir.mkdir(parents=True, exist_ok=True)
+            self._mkdir_with_retry(self.plex_movies_dir)
             self._set_file_permissions(self.plex_movies_dir)
             return self.plex_movies_dir, "%(title)s.%(ext)s"
         else:
@@ -237,13 +249,34 @@ class YTDLPService:
 
     def _get_track_number(self, album_dir: Path, codec: str) -> str:
         """Get the next track number for files in an album directory."""
-        if not album_dir.exists():
+        # Check if directory exists with retry for NFS
+        try:
+            dir_exists = self._retry_nfs_operation(
+                lambda: album_dir.exists(),
+                max_retries=3,
+                operation_name=f"checking directory existence: {album_dir}"
+            )
+            if not dir_exists:
+                return "01"
+        except Exception as e:
+            print(f"Error checking directory {album_dir}: {e}, defaulting to track 01")
             return "01"
         
-        # Find all audio files in the album
+        # Find all audio files in the album with retry for NFS
         audio_files = []
-        for ext in [".mp3", ".m4a", ".flac", ".ogg", ".wav"]:
-            audio_files.extend(album_dir.glob(f"*{ext}"))
+        try:
+            for ext in [".mp3", ".m4a", ".flac", ".ogg", ".wav"]:
+                files = self._retry_nfs_operation(
+                    lambda: list(album_dir.glob(f"*{ext}")),
+                    max_retries=3,
+                    operation_name=f"listing files in {album_dir}",
+                    path=album_dir
+                )
+                if files:
+                    audio_files.extend(files)
+        except Exception as e:
+            print(f"Error listing files in {album_dir}: {e}, defaulting to track 01")
+            return "01"
         
         # Extract track numbers from existing files
         track_numbers = []
@@ -385,6 +418,24 @@ class YTDLPService:
             # Update template to include track number
             filename_template = f"{track_num} - %(title)s.%(ext)s"
         
+        # Validate output directory is accessible (important for NFS mounts)
+        try:
+            self._retry_nfs_operation(
+                lambda: output_dir.exists() or output_dir.mkdir(parents=True, exist_ok=True),
+                max_retries=3,
+                operation_name=f"validating output directory: {output_dir}",
+                path=output_dir
+            )
+            # Test write access by checking if we can list the directory
+            self._retry_nfs_operation(
+                lambda: list(output_dir.iterdir()) if output_dir.exists() else True,
+                max_retries=2,
+                operation_name=f"testing directory access: {output_dir}",
+                path=output_dir
+            )
+        except Exception as e:
+            raise Exception(f"Cannot access output directory {output_dir}: {e}. This may be an NFS stale file handle issue. Please check your NFS mount.")
+        
         output_template = str(output_dir / filename_template)
         downloaded_file = None
 
@@ -475,11 +526,30 @@ class YTDLPService:
             if not final_file and Path(downloaded_file).exists():
                 final_file = Path(downloaded_file)
 
-        # Fallback: find most recent file in output dir
+        # Fallback: find most recent file in output dir (exclude temp files)
         if not final_file:
-            files = list(output_dir.glob("*"))
-            if files:
-                final_file = max(files, key=lambda f: f.stat().st_mtime)
+            try:
+                all_files = self._retry_nfs_operation(
+                    lambda: list(output_dir.glob("*")),
+                    max_retries=3,
+                    operation_name=f"finding files in {output_dir}",
+                    path=output_dir
+                )
+                files = [f for f in all_files 
+                        if f.is_file() and not f.name.endswith(".tmp.mp4") and not f.name.endswith(".tmp.m4a")]
+                if files:
+                    # Get file mtime with retry
+                    def get_mtime(f):
+                        return self._retry_nfs_operation(
+                            lambda: f.stat().st_mtime,
+                            max_retries=2,
+                            operation_name=f"getting mtime for {f.name}",
+                            path=f
+                        )
+                    final_file = max(files, key=get_mtime)
+            except Exception as e:
+                print(f"Error finding files in output directory: {e}")
+                raise Exception("Could not locate downloaded file")
 
         if not final_file:
             raise Exception("Could not locate downloaded file")
@@ -492,11 +562,25 @@ class YTDLPService:
             new_file = output_dir / new_name
             
             # Rename if filename is different (to use cleaned title)
-            if final_file.name != new_name and not new_file.exists():
-                final_file.rename(new_file)
-                final_file = new_file
-                # Set permissions on the renamed file
-                self._set_file_permissions(final_file)
+            if final_file.name != new_name:
+                # Check if new file exists with retry
+                new_exists = self._retry_nfs_operation(
+                    lambda: new_file.exists(),
+                    max_retries=2,
+                    operation_name=f"checking if {new_file.name} exists",
+                    path=new_file
+                )
+                if not new_exists:
+                    # Rename with retry for NFS
+                    self._retry_nfs_operation(
+                        lambda: final_file.rename(new_file),
+                        max_retries=3,
+                        operation_name=f"renaming {final_file.name} to {new_file.name}",
+                        path=final_file
+                    )
+                    final_file = new_file
+                    # Set permissions on the renamed file
+                    self._set_file_permissions(final_file)
 
         # Set permissions on the final file for NFS shares
         if final_file.exists():
@@ -524,6 +608,53 @@ class YTDLPService:
 
         # Convert video if requested (only for video files, not audio-only)
         if convert_video and not is_audio_only and final_file.exists():
+            # Clean up any leftover temp files from previous failed conversions
+            temp_files = list(final_file.parent.glob("*.tmp.mp4"))
+            for temp_file in temp_files:
+                try:
+                    if temp_file.exists():
+                        temp_file.unlink()
+                        print(f"Cleaned up leftover temp file: {temp_file.name}")
+                except Exception as e:
+                    print(f"Could not clean up temp file {temp_file.name}: {e}")
+            
+            # Validate that we're not trying to convert a temp file
+            if final_file.name.endswith(".tmp.mp4"):
+                # This shouldn't happen, but if it does, find the original file
+                original_name = final_file.name.replace(".tmp.mp4", ".mp4")
+                original_file = final_file.parent / original_name
+                if original_file.exists() and original_file.stat().st_size > 0:
+                    print(f"Found temp file, using original instead: {original_file.name}")
+                    final_file = original_file
+                else:
+                    raise Exception(f"Cannot convert temp file. Original file not found: {original_name}")
+            
+            # Validate file is not empty or corrupted
+            if final_file.stat().st_size == 0:
+                raise Exception(f"File is empty: {final_file.name}")
+            
+            # Validate file is a valid video file using ffprobe
+            try:
+                validate_args = [
+                    "ffprobe",
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(final_file)
+                ]
+                validate_result = subprocess.run(
+                    validate_args,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if validate_result.returncode != 0:
+                    raise Exception(f"File appears to be corrupted or incomplete: {final_file.name}. Error: {validate_result.stderr[:200]}")
+            except subprocess.TimeoutExpired:
+                print(f"Warning: Could not validate file {final_file.name} (timeout), proceeding anyway")
+            except Exception as e:
+                raise Exception(f"Cannot convert file - validation failed: {e}")
+            
             if progress_callback:
                 progress_callback({
                     "status": "converting",
@@ -642,14 +773,27 @@ class YTDLPService:
     def _check_nvidia_gpu(self) -> bool:
         """Check if NVIDIA GPU is available for hardware encoding."""
         try:
+            # Check if nvidia-smi works
             result = subprocess.run(
                 ["nvidia-smi"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            if result.returncode != 0:
+                return False
+            
+            # Check if ffmpeg has h264_nvenc encoder available
+            test_result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            # Just check if encoder is listed - actual functionality will be tested during conversion
+            return test_result.returncode == 0 and "h264_nvenc" in test_result.stdout
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+            print(f"GPU check failed: {e}, using CPU encoding")
             return False
 
     def _get_video_duration(self, file_path: Path) -> float:
@@ -742,103 +886,135 @@ class YTDLPService:
             # Map all streams (video and audio)
             args.extend(["-map", "0"])
             
-            # Video encoding options
-            if use_hw_accel:
-                # Use NVIDIA hardware encoding
-                args.extend([
-                    "-c:v", "h264_nvenc",  # NVIDIA H.264 encoder
-                    "-preset", "p4",  # Balanced preset
-                    "-crf", "23",  # Quality (lower = better, 18-28 is good range)
-                    "-b:v", "0",  # Let CRF control bitrate
-                ])
-            else:
-                # Software encoding (libx264)
-                args.extend([
-                    "-c:v", "libx264",
-                    "-preset", "medium",  # Balance between speed and compression
-                    "-crf", "23",  # Quality
-                ])
-            
-            # Audio encoding - FORCE re-encoding to AAC (don't copy)
-            args.extend([
-                "-c:a", "aac",  # Force AAC encoding
-                "-b:a", "192k",  # Audio bitrate
-                "-ar", "48000",  # Sample rate
-                "-ac", "2",  # Stereo
-            ])
-            
-            # Copy metadata if present
-            args.extend(["-map_metadata", "0"])
-            
-            # Web optimization
-            args.extend(["-movflags", "+faststart"])
-            
-            # Write to temporary file first
-            args.extend(["-y", str(temp_file)])  # -y to overwrite
-            
-            print(f"Converting video: {file_path.name} -> {output_file.name}")
-            print(f"Using temporary file: {temp_file.name}")
-            if duration > 0:
-                print(f"Video duration: {duration:.2f} seconds")
-            
-            # Run conversion with progress tracking
-            process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Read progress from stdout and errors from stderr
-            import threading
-            stderr_lines = []
-            
-            def read_stderr():
-                for line in process.stderr:
-                    stderr_lines.append(line)
-            
-            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-            stderr_thread.start()
-            
-            # Read progress from stdout
-            last_progress = 0.0
-            current_speed = None
-            for line in process.stdout:
-                if cancel_check and cancel_check():
-                    process.terminate()
-                    process.wait()
-                    raise Exception("Conversion cancelled")
+            # Try conversion - first with GPU if available, fallback to CPU on error
+            conversion_success = False
+            for attempt in range(2):  # Try GPU first, then CPU
+                try_gpu = use_hw_accel and attempt == 0
                 
-                # Parse progress line (key=value format)
-                if "=" in line:
-                    key, value = line.strip().split("=", 1)
+                # Build ffmpeg command
+                args = [
+                    "ffmpeg",
+                    "-i", str(file_path),
+                    "-progress", "pipe:1",
+                    "-loglevel", "error",
+                    "-map", "0",
+                ]
+                
+                # Video encoding options
+                if try_gpu:
+                    # Use NVIDIA hardware encoding
+                    args.extend([
+                        "-c:v", "h264_nvenc",
+                        "-preset", "p4",
+                        "-crf", "23",
+                        "-b:v", "0",
+                    ])
+                    print(f"Attempting GPU encoding (attempt {attempt + 1})...")
+                else:
+                    # Software encoding (libx264)
+                    args.extend([
+                        "-c:v", "libx264",
+                        "-preset", "medium",
+                        "-crf", "23",
+                    ])
+                    if attempt == 1:
+                        print("GPU encoding failed, falling back to CPU encoding...")
+                
+                # Audio encoding - FORCE re-encoding to AAC (don't copy)
+                args.extend([
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000",
+                    "-ac", "2",
+                    "-map_metadata", "0",
+                    "-movflags", "+faststart",
+                    "-y", str(temp_file),
+                ])
+                
+                if attempt == 0:
+                    print(f"Converting video: {file_path.name} -> {output_file.name}")
+                    print(f"Using temporary file: {temp_file.name}")
+                    if duration > 0:
+                        print(f"Video duration: {duration:.2f} seconds")
+                
+                # Run conversion with progress tracking
+                import threading
+                process = subprocess.Popen(
+                    args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                # Read progress from stdout and errors from stderr
+                stderr_lines = []
+                
+                def read_stderr():
+                    for line in process.stderr:
+                        stderr_lines.append(line)
+                
+                stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+                stderr_thread.start()
+                
+                # Read progress from stdout
+                last_progress = 0.0
+                current_speed = None
+                for line in process.stdout:
+                    if cancel_check and cancel_check():
+                        process.terminate()
+                        process.wait()
+                        raise Exception("Conversion cancelled")
                     
-                    # Extract speed
-                    if key == "speed":
-                        try:
-                            speed_val = float(value)
-                            current_speed = f"{speed_val:.2f}x"
-                        except ValueError:
-                            pass
+                    # Parse progress line (key=value format)
+                    if "=" in line:
+                        key, value = line.strip().split("=", 1)
+                        
+                        # Extract speed
+                        if key == "speed":
+                            try:
+                                speed_val = float(value)
+                                current_speed = f"{speed_val:.2f}x"
+                            except ValueError:
+                                pass
+                        
+                        # Extract progress
+                        progress = self._parse_ffmpeg_progress(line, duration)
+                        if progress is not None and progress > last_progress:
+                            last_progress = progress
+                            if progress_callback:
+                                progress_callback(progress, current_speed)
+                
+                # Wait for stderr thread to finish
+                stderr_thread.join(timeout=1)
+                
+                # Wait for process to complete
+                process.wait()
+                
+                if process.returncode == 0:
+                    conversion_success = True
+                    break
+                else:
+                    stderr_output = "\n".join(stderr_lines) if stderr_lines else "Unknown error"
                     
-                    # Extract progress
-                    progress = self._parse_ffmpeg_progress(line, duration)
-                    if progress is not None and progress > last_progress:
-                        last_progress = progress
-                        if progress_callback:
-                            progress_callback(progress, current_speed)
+                    # If GPU encoding failed due to driver/library issues, retry with CPU
+                    if try_gpu and (
+                        "libnvidia-encode" in stderr_output or 
+                        "driver" in stderr_output.lower() or
+                        ("nvenc" in stderr_output.lower() and ("cannot" in stderr_output.lower() or "error" in stderr_output.lower()))
+                    ):
+                        print(f"GPU encoding failed: {stderr_output[:200]}...")
+                        print("NVIDIA libraries not accessible from container (NVIDIA Container Toolkit may not be configured)")
+                        print("Falling back to CPU encoding...")
+                        # Will retry with CPU on next iteration
+                        continue
+                    else:
+                        # Other errors - fail immediately
+                        raise subprocess.CalledProcessError(process.returncode, args, stderr=stderr_output)
             
-            # Wait for stderr thread to finish
-            stderr_thread.join(timeout=1)
-            
-            # Wait for process to complete
-            process.wait()
-            
-            if process.returncode != 0:
-                stderr_output = "\n".join(stderr_lines) if stderr_lines else "Unknown error"
-                raise subprocess.CalledProcessError(process.returncode, args, stderr=stderr_output)
+            if not conversion_success:
+                raise Exception("Video conversion failed with both GPU and CPU encoding")
             
             # Check if temp file was created and has content
             if not temp_file.exists():
@@ -893,10 +1069,30 @@ class YTDLPService:
             print(f"Error converting video: {e}")
             raise
 
-    def get_plex_status(self) -> Dict[str, Any]:
-        """Check if Plex directories are configured and accessible."""
-        movies_available = self.plex_movies_dir.exists() or self._can_create_dir(self.plex_movies_dir)
-        music_available = self.plex_music_dir.exists() or self._can_create_dir(self.plex_music_dir)
+    def get_plex_status(self, use_cache: bool = True) -> Dict[str, Any]:
+        """
+        Check if Plex directories are configured and accessible.
+        
+        Args:
+            use_cache: If True, use cached status if available and valid
+            
+        Returns:
+            Dictionary with Plex status information
+        """
+        # Check cached status first
+        if use_cache:
+            cached_movies = self._get_cached_mount_status(self.plex_movies_dir)
+            cached_music = self._get_cached_mount_status(self.plex_music_dir)
+            
+            # If both are cached and valid, use them
+            if cached_movies is not None and cached_music is not None:
+                movies_available = cached_movies
+                music_available = cached_music
+            else:
+                # Need to check at least one, so check both
+                movies_available, music_available = self._check_plex_mounts()
+        else:
+            movies_available, music_available = self._check_plex_mounts()
         
         return {
             "enabled": movies_available or music_available,
@@ -905,11 +1101,127 @@ class YTDLPService:
             "music_path": str(self.plex_music_dir),
             "music_available": music_available,
         }
+    
+    def _check_plex_mounts(self) -> Tuple[bool, bool]:
+        """
+        Check Plex mount availability and update cache.
+        
+        Returns:
+            Tuple of (movies_available, music_available)
+        """
+        # Check movies directory
+        try:
+            movies_exists = self._retry_nfs_operation(
+                lambda: self.plex_movies_dir.exists(),
+                max_retries=3,
+                operation_name=f"checking plex_movies_dir: {self.plex_movies_dir}",
+                path=self.plex_movies_dir
+            )
+            movies_available = movies_exists or self._can_create_dir(self.plex_movies_dir)
+            self._set_cached_mount_status(self.plex_movies_dir, movies_available)
+        except Exception as e:
+            print(f"Error checking plex_movies_dir: {e}")
+            movies_available = False
+            self._set_cached_mount_status(self.plex_movies_dir, False)
+        
+        # Check music directory
+        try:
+            music_exists = self._retry_nfs_operation(
+                lambda: self.plex_music_dir.exists(),
+                max_retries=3,
+                operation_name=f"checking plex_music_dir: {self.plex_music_dir}",
+                path=self.plex_music_dir
+            )
+            music_available = music_exists or self._can_create_dir(self.plex_music_dir)
+            self._set_cached_mount_status(self.plex_music_dir, music_available)
+        except Exception as e:
+            print(f"Error checking plex_music_dir: {e}")
+            music_available = False
+            self._set_cached_mount_status(self.plex_music_dir, False)
+        
+        return movies_available, music_available
+
+    async def _mount_health_monitor(self, interval: float = 45.0):
+        """
+        Background task to periodically monitor NFS mount health and proactively refresh mounts.
+        
+        Args:
+            interval: How often to check mounts in seconds (default: 45 seconds)
+        """
+        import time
+        while self._monitor_running:
+            try:
+                # Check both Plex mounts (they're always configured, even if using defaults)
+                mounts_to_check = [self.plex_movies_dir, self.plex_music_dir]
+                
+                for mount_path in mounts_to_check:
+                    try:
+                        # Try to access the mount - if it fails, it might be stale
+                        # Use a quick check that doesn't require the full get_plex_status logic
+                        try:
+                            mount_path.stat()
+                            # Mount is accessible, refresh cache with positive status
+                            self._set_cached_mount_status(mount_path, True)
+                            # Proactively refresh the mount to prevent staleness
+                            self._refresh_nfs_mount(mount_path)
+                        except OSError as e:
+                            if e.errno == 116:  # Stale file handle
+                                print(f"Health monitor detected stale file handle on {mount_path}, attempting refresh...")
+                                # Try to refresh the mount
+                                refresh_success = self._refresh_nfs_mount(mount_path)
+                                if refresh_success:
+                                    # Try accessing again after refresh
+                                    try:
+                                        mount_path.stat()
+                                        self._set_cached_mount_status(mount_path, True)
+                                        print(f"Mount refresh successful for {mount_path}")
+                                    except OSError:
+                                        self._set_cached_mount_status(mount_path, False)
+                                        print(f"Mount still unavailable after refresh: {mount_path}")
+                                else:
+                                    self._set_cached_mount_status(mount_path, False)
+                            else:
+                                # Other error, mark as unavailable
+                                self._set_cached_mount_status(mount_path, False)
+                    except Exception as e:
+                        print(f"Error in health monitor checking {mount_path}: {e}")
+                        self._set_cached_mount_status(mount_path, False)
+                
+                # Wait for next check
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                # Task was cancelled, exit cleanly
+                break
+            except Exception as e:
+                print(f"Error in mount health monitor: {e}")
+                # Wait a bit before retrying to avoid tight error loops
+                await asyncio.sleep(interval)
+
+    async def start_monitor(self):
+        """Start the background mount health monitor."""
+        if not self._monitor_running:
+            self._monitor_running = True
+            loop = asyncio.get_event_loop()
+            self._health_monitor_task = loop.create_task(self._mount_health_monitor())
+            print("NFS mount health monitor started")
+
+    async def stop_monitor(self):
+        """Stop the background mount health monitor."""
+        if self._monitor_running:
+            self._monitor_running = False
+            if self._health_monitor_task:
+                self._health_monitor_task.cancel()
+                try:
+                    await self._health_monitor_task
+                except asyncio.CancelledError:
+                    pass
+                self._health_monitor_task = None
+            print("NFS mount health monitor stopped")
 
     def _can_create_dir(self, path: Path) -> bool:
         """Check if we can create a directory at the given path."""
         try:
-            path.mkdir(parents=True, exist_ok=True)
+            self._mkdir_with_retry(path)
             return True
         except (PermissionError, OSError):
             return False
@@ -929,6 +1241,195 @@ class YTDLPService:
         except (PermissionError, OSError) as e:
             # If we can't set permissions (e.g., on NFS with root_squash), log but don't fail
             print(f"Could not set permissions on {file_path}: {e}")
+
+    def _get_cached_mount_status(self, mount_path: Path) -> Optional[bool]:
+        """
+        Get cached mount status if it's still valid (within TTL).
+        
+        Args:
+            mount_path: The mount path to check
+            
+        Returns:
+            True if mount is available, False if unavailable, None if cache is expired/missing
+        """
+        path_str = str(mount_path)
+        if path_str in self._mount_status_cache:
+            status, timestamp = self._mount_status_cache[path_str]
+            import time
+            age = time.time() - timestamp
+            if age < self._mount_cache_ttl:
+                return status
+            else:
+                # Cache expired, remove it
+                del self._mount_status_cache[path_str]
+        return None
+
+    def _set_cached_mount_status(self, mount_path: Path, is_available: bool):
+        """
+        Cache mount status with current timestamp.
+        
+        Args:
+            mount_path: The mount path
+            is_available: Whether the mount is available
+        """
+        import time
+        path_str = str(mount_path)
+        self._mount_status_cache[path_str] = (is_available, time.time())
+
+    def _invalidate_mount_cache(self, mount_path: Optional[Path] = None):
+        """
+        Invalidate mount status cache.
+        
+        Args:
+            mount_path: Specific mount path to invalidate, or None to invalidate all
+        """
+        if mount_path:
+            path_str = str(mount_path)
+            if path_str in self._mount_status_cache:
+                del self._mount_status_cache[path_str]
+        else:
+            # Invalidate all cache
+            self._mount_status_cache.clear()
+
+    def _refresh_nfs_mount(self, path: Path) -> bool:
+        """
+        Refresh an NFS mount by accessing parent directories.
+        This forces the NFS client to revalidate the mount connection.
+        
+        Args:
+            path: The path to refresh (can be a file or directory)
+            
+        Returns:
+            True if refresh was successful, False otherwise
+        """
+        try:
+            # Convert to absolute path
+            abs_path = path.resolve()
+            path_str = str(abs_path)
+            
+            # Determine which mount point this path belongs to (if any)
+            mount_root = None
+            if path_str.startswith(str(self.plex_movies_dir)):
+                mount_root = self.plex_movies_dir
+            elif path_str.startswith(str(self.plex_music_dir)):
+                mount_root = self.plex_music_dir
+            
+            # First, try to refresh by accessing the mount root directly
+            if mount_root:
+                try:
+                    mount_root.stat()
+                except OSError:
+                    # If mount root is stale, that's a problem but we'll continue
+                    pass
+            
+            # Walk up the directory tree from the path, accessing each parent
+            # This helps refresh the specific path hierarchy
+            current = abs_path.parent if abs_path.is_file() else abs_path
+            
+            # Stop at root directory (/) to avoid going too far up
+            accessed_count = 0
+            max_walk = 10  # Limit how far up we walk
+            while current != current.parent and accessed_count < max_walk:
+                try:
+                    # Access the directory by calling stat() - this refreshes the mount
+                    current.stat()
+                    accessed_count += 1
+                    # If we've reached a mount root, we can stop
+                    if mount_root and current == mount_root:
+                        break
+                    current = current.parent
+                except OSError as e:
+                    # If we hit an error, try to continue to next parent
+                    # But stop if we've already accessed several directories
+                    if accessed_count > 0:
+                        break
+                    current = current.parent
+                except Exception:
+                    # Any other error, continue to next parent
+                    if accessed_count > 0:
+                        break
+                    current = current.parent
+            
+            return True
+        except Exception as e:
+            print(f"Error refreshing NFS mount for {path}: {e}")
+            return False
+
+    def _retry_nfs_operation(self, operation, *args, max_retries: int = 3, operation_name: str = "operation", path: Optional[Path] = None, **kwargs):
+        """
+        Retry an NFS operation that may fail with stale file handle errors.
+        
+        Args:
+            operation: The operation function to retry
+            *args: Positional arguments to pass to the operation
+            max_retries: Maximum number of retry attempts
+            operation_name: Human-readable name for logging
+            path: Optional Path object for the file/directory being operated on.
+                  If provided and a stale file handle is detected, the mount will be refreshed.
+            **kwargs: Keyword arguments to pass to the operation
+            
+        Returns:
+            The result of the operation
+        """
+        import time
+        for attempt in range(max_retries):
+            try:
+                return operation(*args, **kwargs)
+            except OSError as e:
+                if e.errno == 116:  # Stale file handle
+                    if attempt < max_retries - 1:
+                        # Try to refresh the mount if we have a path
+                        if path:
+                            try:
+                                print(f"NFS stale file handle error during {operation_name}, attempting mount refresh...")
+                                self._refresh_nfs_mount(path)
+                                # Small delay after refresh to let the mount stabilize
+                                time.sleep(0.1)
+                            except Exception as refresh_error:
+                                print(f"Mount refresh failed: {refresh_error}, will retry normally")
+                        
+                        wait_time = (attempt + 1) * 0.5  # Exponential backoff
+                        print(f"Retrying {operation_name} in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"Failed {operation_name} after {max_retries} attempts: {e}")
+                        raise
+                else:
+                    raise
+            except Exception as e:
+                # Check if it's a stale file handle in the error message
+                if "stale file handle" in str(e).lower() or "errno 116" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        # Try to refresh the mount if we have a path
+                        if path:
+                            try:
+                                print(f"NFS stale file handle error during {operation_name}, attempting mount refresh...")
+                                self._refresh_nfs_mount(path)
+                                # Small delay after refresh to let the mount stabilize
+                                time.sleep(0.1)
+                            except Exception as refresh_error:
+                                print(f"Mount refresh failed: {refresh_error}, will retry normally")
+                        
+                        wait_time = (attempt + 1) * 0.5
+                        print(f"Retrying {operation_name} in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"Failed {operation_name} after {max_retries} attempts: {e}")
+                        raise
+                else:
+                    raise
+        return None
+
+    def _mkdir_with_retry(self, path: Path, max_retries: int = 3):
+        """Create directory with retry logic for NFS stale file handle errors."""
+        return self._retry_nfs_operation(
+            lambda: path.mkdir(parents=True, exist_ok=True),
+            max_retries=max_retries,
+            operation_name=f"directory creation: {path}",
+            path=path
+        )
 
 
 # Singleton instance

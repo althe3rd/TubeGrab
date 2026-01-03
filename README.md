@@ -221,6 +221,32 @@ docker run -d \
 - The app will automatically detect GPU and use it if available, or fall back to CPU
 - After adding GPU support, you should see "Using NVIDIA NVENC" in the logs during conversion
 
+### NFS Mount Issues (Stale File Handles)
+
+If you're using NFS shares (like for Plex directories) and getting "stale file handle" errors:
+
+**The app automatically retries operations** when it encounters stale file handle errors, but you can also prevent them:
+
+**On Unraid (NFS Server):**
+1. Ensure your NFS server is stable and not restarting frequently
+2. Check NFS server logs for connection issues
+3. Consider using `soft` mount option (allows timeouts instead of hanging)
+4. Use appropriate timeout values
+
+**NFS Mount Options (if you control the mount):**
+- `soft` - Allows timeouts instead of hanging
+- `intr` - Allows interruption of NFS operations
+- `timeo=14` - Sets timeout to 1.4 seconds (default is 0.7)
+- `retrans=3` - Number of retries before failure
+- `actimeo=3` - Reduces attribute cache time (helps with stale handles)
+
+**Example mount options:**
+```
+mount -t nfs -o soft,intr,timeo=14,retrans=3 server:/path /mnt/path
+```
+
+**Note:** The app includes automatic retry logic for stale file handle errors, so downloads should complete even if the mount becomes temporarily stale. If errors persist, check your NFS server stability and network connection.
+
 ## Usage
 
 1. **Enter URL**: Paste a YouTube video or playlist URL

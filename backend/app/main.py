@@ -7,14 +7,18 @@ import os
 
 from app.routes import downloads, queue
 from app.services.queue import queue_manager
+from app.services.ytdlp import ytdlp_service
+from fastapi import Query
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Start the background download worker
+    # Startup: Start the background download worker and mount health monitor
     await queue_manager.start_worker()
+    await ytdlp_service.start_monitor()
     yield
-    # Shutdown: Stop the worker
+    # Shutdown: Stop the worker and monitor
+    await ytdlp_service.stop_monitor()
     await queue_manager.stop_worker()
 
 
@@ -41,8 +45,30 @@ app.include_router(queue.router, prefix="/api", tags=["queue"])
 
 # Health check endpoint
 @app.get("/api/health")
-async def health_check():
-    return {"status": "healthy", "version": "1.0.0"}
+async def health_check(include_mounts: bool = Query(default=False, description="Include NFS mount status")):
+    """
+    Health check endpoint.
+    
+    Args:
+        include_mounts: If True, include NFS mount status in the response
+    """
+    response = {"status": "healthy", "version": "1.0.0"}
+    
+    if include_mounts:
+        # Get mount status (will use cache if available)
+        plex_status = ytdlp_service.get_plex_status(use_cache=True)
+        response["mounts"] = {
+            "plex_movies": {
+                "available": plex_status["movies_available"],
+                "path": plex_status["movies_path"]
+            },
+            "plex_music": {
+                "available": plex_status["music_available"],
+                "path": plex_status["music_path"]
+            }
+        }
+    
+    return response
 
 
 # Serve frontend static files
