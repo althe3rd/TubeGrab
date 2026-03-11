@@ -10,6 +10,8 @@ const state = {
     selectedFormat: null,
     isAudioOnly: false,
     sendToPlex: false,
+    plexDestination: 'movies',
+    showName: '',
     convertVideo: false,
     plexAvailable: false,
     queue: [],
@@ -51,6 +53,9 @@ const elements = {
     plexToggleContainer: document.getElementById('plex-toggle-container'),
     plexToggle: document.getElementById('plex-toggle'),
     plexToggleHint: document.getElementById('plex-toggle-hint'),
+    plexDestContainer: document.getElementById('plex-dest-container'),
+    plexDestMovies: document.getElementById('plex-dest-movies'),
+    plexDestTv: document.getElementById('plex-dest-tv'),
     convertToggleContainer: document.getElementById('convert-toggle-container'),
     convertToggle: document.getElementById('convert-toggle'),
     convertToggleHint: document.getElementById('convert-toggle-hint'),
@@ -110,8 +115,19 @@ function setupEventListeners() {
     if (elements.plexToggle) {
         elements.plexToggle.addEventListener('change', (e) => {
             state.sendToPlex = e.target.checked;
+            updatePlexDestVisibility();
         });
     }
+
+    // Plex Destination Buttons
+    document.querySelectorAll('.plex-dest-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.plexDestination = btn.dataset.dest;
+            document.querySelectorAll('.plex-dest-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            updatePlexDestVisibility();
+        });
+    });
 
     // Convert Toggle
     if (elements.convertToggle) {
@@ -228,6 +244,26 @@ function setLoading(loading) {
 }
 
 // Display Video Info
+function updatePlexDestVisibility() {
+    if (!elements.plexDestContainer) return;
+    const show = state.sendToPlex && !state.isAudioOnly && state.plexAvailable;
+    if (show) {
+        elements.plexDestContainer.classList.remove('hidden');
+    } else {
+        elements.plexDestContainer.classList.add('hidden');
+    }
+
+    // Show show name input only when TV is selected
+    const showNameContainer = document.getElementById('plex-show-name-container');
+    if (showNameContainer) {
+        if (show && state.plexDestination === 'tv') {
+            showNameContainer.classList.remove('hidden');
+        } else {
+            showNameContainer.classList.add('hidden');
+        }
+    }
+}
+
 function displayVideoInfo(video) {
     elements.videoThumbnail.src = video.thumbnail || '';
     elements.videoDuration.textContent = formatDuration(video.duration);
@@ -245,6 +281,9 @@ function displayVideoInfo(video) {
             elements.plexToggle.checked = state.sendToPlex;
         }
     }
+
+    // Show/hide plex destination selector
+    updatePlexDestVisibility();
 
     // Show convert toggle only for video downloads (not audio-only)
     if (elements.convertToggleContainer) {
@@ -344,7 +383,7 @@ function handleFormatTabChange(tab) {
 
     state.isAudioOnly = tab.dataset.type === 'audio';
 
-    // Show/hide convert toggle based on audio/video selection
+    // Show/hide convert toggle and plex dest based on audio/video selection
     if (elements.convertToggleContainer) {
         if (state.isAudioOnly) {
             elements.convertToggleContainer.classList.add('hidden');
@@ -352,6 +391,7 @@ function handleFormatTabChange(tab) {
             elements.convertToggleContainer.classList.remove('hidden');
         }
     }
+    updatePlexDestVisibility();
 
     if (state.currentVideo) {
         renderFormatOptions(state.currentVideo.formats);
@@ -448,6 +488,9 @@ async function handleDownload() {
     elements.downloadBtn.disabled = true;
 
     try {
+        const showNameInput = document.getElementById('plex-show-name');
+        state.showName = showNameInput ? showNameInput.value.trim() : '';
+
         if (state.isPlaylist && state.playlistItems.length > 0) {
             // Download all playlist items
             const requests = state.playlistItems.map(item => ({
@@ -461,6 +504,8 @@ async function handleDownload() {
                 audio_quality: state.selectedFormat.quality,
                 audio_codec: state.selectedFormat.codec,
                 send_to_plex: state.sendToPlex,
+                plex_destination: state.isAudioOnly ? 'movies' : state.plexDestination,
+                show_name: state.plexDestination === 'tv' && !state.isAudioOnly ? state.showName : null,
                 convert_video: state.convertVideo,
             }));
 
@@ -486,6 +531,8 @@ async function handleDownload() {
                 audio_quality: state.selectedFormat.quality,
                 audio_codec: state.selectedFormat.codec,
                 send_to_plex: state.sendToPlex,
+                plex_destination: state.isAudioOnly ? 'movies' : state.plexDestination,
+                show_name: state.plexDestination === 'tv' && !state.isAudioOnly ? state.showName : null,
                 convert_video: state.convertVideo,
             };
 
@@ -507,7 +554,11 @@ async function handleDownload() {
         state.isPlaylist = false;
         state.playlistItems = [];
         state.sendToPlex = false;
+        state.plexDestination = 'movies';
+        state.showName = '';
         state.convertVideo = false;
+        const showNameInput = document.getElementById('plex-show-name');
+        if (showNameInput) showNameInput.value = '';
 
     } catch (error) {
         showToast(error.message, 'error');
@@ -591,6 +642,7 @@ function updateQueueItemElement(el, item) {
                 <span class="queue-item-format">${item.format_label}</span>
                 ${item.is_audio_only ? '<span>Audio</span>' : '<span>Video</span>'}
             </div>
+            ${item.status === 'failed' && item.error ? `<div class="queue-item-error">${escapeHtml(item.error)}</div>` : ''}
         </div>
         ${showProgress ? `
             <div class="queue-item-progress">

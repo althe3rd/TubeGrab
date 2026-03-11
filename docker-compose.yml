@@ -12,10 +12,14 @@ services:
       # For Unraid: /mnt/user/downloads/youtube:/downloads
       - ./downloads:/downloads
       
-      # Plex Movies directory - videos with "Send to Plex" enabled go here
+      # Plex Movies directory - videos sent to Plex Movies go here
       # For Unraid: /mnt/user/data/media/movies:/plex/movies
       - ./plex/movies:/plex/movies
-      
+
+      # Plex TV directory - videos sent to Plex TV Shows go here
+      # For Unraid: /mnt/user/data/media/tv:/plex/tv
+      - ./plex/tv:/plex/tv
+
       # Plex Music directory - audio with "Send to Plex" enabled goes here
       # For Unraid: /mnt/user/data/media/music:/plex/music
       - ./plex/music:/plex/music
@@ -27,6 +31,7 @@ services:
       - TZ=America/Chicago
       # Plex directory paths (these match the container paths above)
       - PLEX_MOVIES_DIR=/plex/movies
+      - PLEX_TV_DIR=/plex/tv
       - PLEX_MUSIC_DIR=/plex/music
     # Uncomment below to enable NVIDIA GPU support for video conversion
     # Requires NVIDIA Container Toolkit or nvidia-docker
@@ -47,6 +52,7 @@ services:
 # Container Path          | Host Path (example)
 # /downloads              | /mnt/user/downloads/youtube
 # /plex/movies            | /mnt/user/data/media/movies
+# /plex/tv                | /mnt/user/data/media/tv
 # /plex/music             | /mnt/user/data/media/music
 # /root/.cache/yt-dlp     | /mnt/user/appdata/tubegrab/cache
 #
@@ -57,6 +63,7 @@ services:
 # ----------------------
 # TZ                      | Your timezone (e.g., America/Chicago)
 # PLEX_MOVIES_DIR         | /plex/movies (container path, don't change)
+# PLEX_TV_DIR             | /plex/tv (container path, don't change)
 # PLEX_MUSIC_DIR          | /plex/music (container path, don't change)
 #
 # NVIDIA GPU Support (for video conversion):

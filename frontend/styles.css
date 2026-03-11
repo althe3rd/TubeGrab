@@ -517,6 +517,85 @@ body {
     color: var(--text-muted);
 }
 
+/* Plex Destination Selector */
+.plex-dest-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-top: none;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    padding: 8px 16px;
+    margin-top: -4px;
+}
+
+.plex-dest-container.hidden {
+    display: none;
+}
+
+.plex-dest-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.plex-dest-selector {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-primary);
+    border-radius: var(--radius-sm);
+    padding: 3px;
+}
+
+.plex-dest-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: calc(var(--radius-sm) - 2px);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.plex-dest-btn:hover {
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.plex-dest-btn.active {
+    background: rgba(229, 160, 21, 0.2);
+    color: #e5a015;
+    border-color: rgba(229, 160, 21, 0.5);
+    font-weight: 600;
+}
+
+/* TV Show Name Input */
+.plex-show-name-input {
+    flex: 1;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    padding: 5px 10px;
+    outline: none;
+    min-width: 0;
+    transition: border-color 0.2s ease;
+}
+
+.plex-show-name-input:focus {
+    border-color: rgba(229, 160, 21, 0.5);
+}
+
+.plex-show-name-input::placeholder {
+    color: var(--text-muted);
+}
+
 /* Download Button */
 .download-btn {
     display: flex;
@@ -707,6 +786,16 @@ body {
     gap: 12px;
     font-size: 0.8rem;
     color: var(--text-muted);
+}
+
+.queue-item-error {
+    font-size: 0.75rem;
+    color: #e05252;
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 400px;
 }
 
 .queue-item-format {

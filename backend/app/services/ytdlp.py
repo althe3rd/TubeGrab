@@ -17,6 +17,7 @@ from app.models.schemas import (
 # Directory paths from environment variables
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/downloads"))
 PLEX_MOVIES_DIR = Path(os.environ.get("PLEX_MOVIES_DIR", "/plex/movies"))
+PLEX_TV_DIR = Path(os.environ.get("PLEX_TV_DIR", "/plex/tv"))
 PLEX_MUSIC_DIR = Path(os.environ.get("PLEX_MUSIC_DIR", "/plex/music"))
 
 
@@ -27,10 +28,12 @@ class YTDLPService:
         self,
         download_dir: Path = DOWNLOAD_DIR,
         plex_movies_dir: Path = PLEX_MOVIES_DIR,
+        plex_tv_dir: Path = PLEX_TV_DIR,
         plex_music_dir: Path = PLEX_MUSIC_DIR,
     ):
         self.download_dir = download_dir
         self.plex_movies_dir = plex_movies_dir
+        self.plex_tv_dir = plex_tv_dir
         self.plex_music_dir = plex_music_dir
         
         # Mount status cache: stores (status, timestamp) tuples
@@ -59,7 +62,7 @@ class YTDLPService:
         name = re.sub(r'\s+', ' ', name)
         return name
 
-    def _get_output_dir(self, is_audio_only: bool, send_to_plex: bool, artist: Optional[str] = None, album: Optional[str] = None) -> Tuple[Path, str]:
+    def _get_output_dir(self, is_audio_only: bool, send_to_plex: bool, artist: Optional[str] = None, album: Optional[str] = None, plex_destination: Optional[str] = "movies", show_name: Optional[str] = None) -> Tuple[Path, str]:
         """
         Get the appropriate output directory and filename template.
         Returns (output_dir, filename_template)
@@ -93,10 +96,21 @@ class YTDLPService:
                 self._set_file_permissions(self.plex_music_dir)
                 return self.plex_music_dir, "%(title)s.%(ext)s"
         elif send_to_plex and not is_audio_only:
-            # Plex movies: just put in movies folder
-            self._mkdir_with_retry(self.plex_movies_dir)
-            self._set_file_permissions(self.plex_movies_dir)
-            return self.plex_movies_dir, "%(title)s.%(ext)s"
+            # Plex video: route to TV or Movies based on destination
+            if plex_destination == "tv":
+                if show_name:
+                    show_dir = self.plex_tv_dir / self._sanitize_filename(show_name)
+                    self._mkdir_with_retry(show_dir)
+                    self._set_file_permissions(show_dir)
+                    return show_dir, "%(title)s.%(ext)s"
+                else:
+                    self._mkdir_with_retry(self.plex_tv_dir)
+                    self._set_file_permissions(self.plex_tv_dir)
+                    return self.plex_tv_dir, "%(title)s.%(ext)s"
+            else:
+                self._mkdir_with_retry(self.plex_movies_dir)
+                self._set_file_permissions(self.plex_movies_dir)
+                return self.plex_movies_dir, "%(title)s.%(ext)s"
         else:
             # Regular downloads
             return self.download_dir, "%(title)s.%(ext)s"
@@ -107,6 +121,7 @@ class YTDLPService:
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
+            "extractor_args": {"youtube": {"player_client": ["all"]}},
         }
 
     def _parse_formats(self, formats: List[Dict]) -> List[VideoFormat]:
@@ -305,6 +320,8 @@ class YTDLPService:
         audio_quality: Optional[str] = None,
         audio_codec: Optional[str] = None,
         send_to_plex: bool = False,
+        plex_destination: Optional[str] = "movies",
+        show_name: Optional[str] = None,
         convert_video: bool = False,
         progress_callback: Optional[Callable[[Dict], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
@@ -404,10 +421,12 @@ class YTDLPService:
 
         # Get output directory and filename template
         output_dir, filename_template = self._get_output_dir(
-            is_audio_only, 
-            send_to_plex, 
-            artist, 
-            album
+            is_audio_only,
+            send_to_plex,
+            artist,
+            album,
+            plex_destination,
+            show_name,
         )
         
         # For Plex music, determine track number and add to filename
@@ -469,6 +488,7 @@ class YTDLPService:
                 "progress_hooks": [progress_hook],
                 "quiet": True,
                 "no_warnings": True,
+                "extractor_args": {"youtube": {"player_client": ["all"]}},
             }
 
             # Add metadata embedding for better Plex recognition
@@ -1082,32 +1102,35 @@ class YTDLPService:
         # Check cached status first
         if use_cache:
             cached_movies = self._get_cached_mount_status(self.plex_movies_dir)
+            cached_tv = self._get_cached_mount_status(self.plex_tv_dir)
             cached_music = self._get_cached_mount_status(self.plex_music_dir)
-            
-            # If both are cached and valid, use them
-            if cached_movies is not None and cached_music is not None:
+
+            # If all are cached and valid, use them
+            if cached_movies is not None and cached_tv is not None and cached_music is not None:
                 movies_available = cached_movies
+                tv_available = cached_tv
                 music_available = cached_music
             else:
-                # Need to check at least one, so check both
-                movies_available, music_available = self._check_plex_mounts()
+                movies_available, tv_available, music_available = self._check_plex_mounts()
         else:
-            movies_available, music_available = self._check_plex_mounts()
+            movies_available, tv_available, music_available = self._check_plex_mounts()
         
         return {
             "enabled": movies_available or music_available,
             "movies_path": str(self.plex_movies_dir),
             "movies_available": movies_available,
+            "tv_path": str(self.plex_tv_dir),
+            "tv_available": tv_available,
             "music_path": str(self.plex_music_dir),
             "music_available": music_available,
         }
     
-    def _check_plex_mounts(self) -> Tuple[bool, bool]:
+    def _check_plex_mounts(self) -> Tuple[bool, bool, bool]:
         """
         Check Plex mount availability and update cache.
-        
+
         Returns:
-            Tuple of (movies_available, music_available)
+            Tuple of (movies_available, tv_available, music_available)
         """
         # Check movies directory
         try:
@@ -1123,7 +1146,22 @@ class YTDLPService:
             print(f"Error checking plex_movies_dir: {e}")
             movies_available = False
             self._set_cached_mount_status(self.plex_movies_dir, False)
-        
+
+        # Check TV directory
+        try:
+            tv_exists = self._retry_nfs_operation(
+                lambda: self.plex_tv_dir.exists(),
+                max_retries=3,
+                operation_name=f"checking plex_tv_dir: {self.plex_tv_dir}",
+                path=self.plex_tv_dir
+            )
+            tv_available = tv_exists or self._can_create_dir(self.plex_tv_dir)
+            self._set_cached_mount_status(self.plex_tv_dir, tv_available)
+        except Exception as e:
+            print(f"Error checking plex_tv_dir: {e}")
+            tv_available = False
+            self._set_cached_mount_status(self.plex_tv_dir, False)
+
         # Check music directory
         try:
             music_exists = self._retry_nfs_operation(
@@ -1138,8 +1176,8 @@ class YTDLPService:
             print(f"Error checking plex_music_dir: {e}")
             music_available = False
             self._set_cached_mount_status(self.plex_music_dir, False)
-        
-        return movies_available, music_available
+
+        return movies_available, tv_available, music_available
 
     async def _mount_health_monitor(self, interval: float = 45.0):
         """
@@ -1151,8 +1189,8 @@ class YTDLPService:
         import time
         while self._monitor_running:
             try:
-                # Check both Plex mounts (they're always configured, even if using defaults)
-                mounts_to_check = [self.plex_movies_dir, self.plex_music_dir]
+                # Check all Plex mounts (they're always configured, even if using defaults)
+                mounts_to_check = [self.plex_movies_dir, self.plex_tv_dir, self.plex_music_dir]
                 
                 for mount_path in mounts_to_check:
                     try:
@@ -1311,6 +1349,8 @@ class YTDLPService:
             mount_root = None
             if path_str.startswith(str(self.plex_movies_dir)):
                 mount_root = self.plex_movies_dir
+            elif path_str.startswith(str(self.plex_tv_dir)):
+                mount_root = self.plex_tv_dir
             elif path_str.startswith(str(self.plex_music_dir)):
                 mount_root = self.plex_music_dir
             

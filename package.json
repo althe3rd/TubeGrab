@@ -1,0 +1,13 @@
+{
+  "name": "tubegrab",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "docker compose up --build",
+    "dev:detach": "docker compose up --build -d",
+    "dev:down": "docker compose down",
+    "docker:build": "docker buildx build --platform linux/amd64,linux/arm64 -t althe3rd/tubegrab:latest --push .",
+    "docker:build:tag": "docker buildx build --platform linux/amd64,linux/arm64 -t althe3rd/tubegrab:latest -t althe3rd/tubegrab:$npm_config_tag --push .",
+    "docker:setup-builder": "docker buildx inspect tubegrab-builder > /dev/null 2>&1 || docker buildx create --name tubegrab-builder --use && docker buildx use tubegrab-builder"
+  }
+}

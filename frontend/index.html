@@ -25,7 +25,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=1.1">
 </head>
 <body>
     <div class="app-container">
@@ -110,6 +110,27 @@
                                 </span>
                             </label>
                             <span class="plex-toggle-hint" id="plex-toggle-hint">Videos → Movies, Audio → Music</span>
+                        </div>
+
+                        <!-- Plex Video Destination Selector (only for video + plex) -->
+                        <div class="plex-dest-container hidden" id="plex-dest-container">
+                            <span class="plex-dest-label">Plex Library</span>
+                            <div class="plex-dest-selector">
+                                <button class="plex-dest-btn active" id="plex-dest-movies" data-dest="movies">
+                                    <svg viewBox="0 0 24 24" fill="none" width="14" height="14"><rect x="2" y="2" width="20" height="20" rx="2" stroke="currentColor" stroke-width="2"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                    Movies
+                                </button>
+                                <button class="plex-dest-btn" id="plex-dest-tv" data-dest="tv">
+                                    <svg viewBox="0 0 24 24" fill="none" width="14" height="14"><rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                    TV Shows
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- TV Show Name Input (only for TV destination) -->
+                        <div class="plex-dest-container hidden" id="plex-show-name-container">
+                            <span class="plex-dest-label">Show Name</span>
+                            <input type="text" id="plex-show-name" class="plex-show-name-input" placeholder="e.g. Captain N: Game Master">
                         </div>
 
                         <!-- Video Conversion Toggle (only for video downloads) -->
@@ -198,7 +219,7 @@
         <div class="toast-container" id="toast-container"></div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=1.1"></script>
 </body>
 </html>
 

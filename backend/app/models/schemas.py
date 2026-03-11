@@ -70,6 +70,8 @@ class DownloadRequest(BaseModel):
     audio_quality: Optional[str] = None  # e.g., "320", "192", "128"
     audio_codec: Optional[str] = None  # e.g., "mp3", "m4a"
     send_to_plex: bool = False  # Route to Plex library folder
+    plex_destination: Optional[str] = "movies"  # "movies" or "tv" (video only)
+    show_name: Optional[str] = None  # Folder name for TV show (TV destination only)
     convert_video: bool = False  # Convert video to H.264/AAC MP4 after download
     playlist_items: Optional[List[str]] = None  # List of video IDs if downloading multiple
 
@@ -86,6 +88,8 @@ class QueueItem(BaseModel):
     audio_quality: Optional[str] = None
     audio_codec: Optional[str] = None
     send_to_plex: bool = False
+    plex_destination: Optional[str] = "movies"
+    show_name: Optional[str] = None
     convert_video: bool = False
     status: DownloadStatus = DownloadStatus.QUEUED
     progress: float = 0.0

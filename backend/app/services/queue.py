@@ -68,6 +68,8 @@ class DownloadQueueManager:
                 audio_quality=request.audio_quality,
                 audio_codec=request.audio_codec,
                 send_to_plex=request.send_to_plex,
+                plex_destination=request.plex_destination,
+                show_name=request.show_name,
                 convert_video=request.convert_video,
             )
             self._queue[item.id] = item
@@ -324,6 +326,8 @@ class DownloadQueueManager:
                 audio_quality=item.audio_quality,
                 audio_codec=item.audio_codec,
                 send_to_plex=item.send_to_plex,
+                plex_destination=item.plex_destination,
+                show_name=item.show_name,
                 convert_video=item.convert_video,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
