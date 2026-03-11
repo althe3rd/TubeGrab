@@ -557,8 +557,8 @@ async function handleDownload() {
         state.plexDestination = 'movies';
         state.showName = '';
         state.convertVideo = false;
-        const showNameInput = document.getElementById('plex-show-name');
-        if (showNameInput) showNameInput.value = '';
+        const showNameEl = document.getElementById('plex-show-name');
+        if (showNameEl) showNameEl.value = '';
 
     } catch (error) {
         showToast(error.message, 'error');
